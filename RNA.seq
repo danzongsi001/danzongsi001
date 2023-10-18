@@ -1,0 +1,123 @@
+#!/bin/bash
+
+
+# --------------------------------------------------
+# STEP0: Preparing
+# --------------------------------------------------
+
+raw_path="/alldata/gsn/HeZuo/X101SC22074485-Z01-J009/00.CleanData" 
+ref_path="/alldata/gsn/Reference"
+gsn_path="/alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file"
+
+
+# 这个奇怪的符号是区块注释，一些程序跑过了注释掉，下次运行整个脚本就不会再运行了
+:<<!  
+# https://github.com/alexdobin/STAR
+conda activate 
+cd /alldata/gsn/Software
+wget https://github.com/alexdobin/STAR/archive/2.7.11a.tar.gz
+tar -xzf 2.7.11a.tar.gz
+cd /alldata/gsn/Software/STAR-2.7.11a/source
+make STAR
+vim ~/.bashrc
+export PATH=$PATH:/alldata/gsn/Software/STAR-2.7.11a/source
+source ~/.bashrc
+!
+
+:<<!
+# https://subread.sourceforge.net/featureCounts.html
+cd 
+axel -n 100 https://sourceforge.net/projects/subread/files/subread-2.0.6/subread-2.0.6-Linux-x86_64.tar.gz
+tar -zxvf subread-2.0.6-Linux-x86_64.tar.gz
+vim ~/.bashrc
+export PATH=$PATH:/alldata/gsn/Software/subread-2.0.6-Linux-x86_64/bin
+source ~/.bashrc
+bin 
+!
+
+
+# --------------------------------------------------
+# STEP1: STAR alignment (fastq -> bam)
+# --------------------------------------------------
+
+# https://github.com/alexdobin/STAR  这里可以下载到一个pdf说明
+
+:<<!
+# runing just once 
+STAR --runMode genomeGenerate \
+--genomeDir $ref_path \
+--genomeFastaFiles $ref_path/hg38.fa \
+--sjdbOverhang 100 \
+--runThreadN 100 \
+--sjdbGTFfile /alldata/gsn/Reference/funcotator_dataSources.v1.7.20200521s/gencode/hg38/gencode.v34.annotation.REORDERED.gtf
+!
+
+
+:<<!
+#ls $raw_path > $gsn_path/sample_info.txt
+for sample in $(ls $raw_path)
+do	
+	fq1=$(ls $raw_path/$sample/*_1.clean.fq.gz)
+	fq2=$(ls $raw_path/$sample/*_2.clean.fq.gz)
+	echo "...... $sample ......"
+	echo "...... $fq1 ......"
+	echo "...... $fq2 ......"
+
+	# ~8mins/sample
+ 	time STAR --twopassMode Basic \
+ 		 --quantMode TranscriptomeSAM GeneCounts \
+        --runThreadN 20 \
+        --genomeDir ${ref_path} \
+        --alignIntronMin 20 \
+        --alignIntronMax 50000 \
+        --outSAMtype BAM SortedByCoordinate \
+        --outSAMattrRGline ID:${sample} SM:${sample} PL:ILLUMINA \
+        --outFilterMismatchNmax 2 \
+        --outSJfilterReads Unique \
+        --outSAMmultNmax 1 \
+        --outFileNamePrefix ${gsn_path}/STAR/${sample}_sort \
+        --outSAMmapqUnique 60 \
+        --readFilesCommand gunzip -c \
+        --readFilesIn $fq1 $fq2
+done
+!
+
+# 检查文件个数：路径下所有样本的bam文件是否都生成了
+# find ./ -name "*_sortAligned.sortedByCoord.out.bam" | wc -l
+
+
+
+# --------------------------------------------------
+# STEP2: featureCounts (bam -> count)
+# --------------------------------------------------
+
+# https://subread.sourceforge.net/featureCounts.html
+
+# 最后的参数输入所有样本的_sortAligned.sortedByCoord.out.bam文件即可，直接能输出样本合并的count数据，后续就不需要对每个样本的count文件再进行合并
+# featureCount要注意参数设置，我当前这个项目是非链特异性建库，链特异性建库的话要多设置一个参数-s
+featureCounts -p --countReadPairs \
+-t exon \
+-g gene_id \
+-a /alldata/gsn/Reference/funcotator_dataSources.v1.7.20200521s/gencode/hg38/gencode.v34.annotation.REORDERED.gtf \
+-o ${gsn_path}/Count/featureCounts_merge.txt \
+-T 50 \
+${gsn_path}/STAR/*_sortAligned.sortedByCoord.out.bam
+
+# 经过检查，总行数为gtf文件中注释的所有基因
+# awk '$3 == "gene" {count++} END {print "Total rows with 'gene': " count}' gencode.v34.annotation.REORDERED.gtf
+# 最后一列为cont值，倒数第二列为该基因非冗余外显子长度（这个长度直接用来计算FPKM或TPM，不能直接用基因end-start的总长度计算！）
+
+
+
+# --------------------------------------------------
+# STEP3: Rscript (count -> fpkm/tpm)
+# --------------------------------------------------
+Rscript /alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file/2_Count_FPKM_TPM.R
+
+
+
+# 其它细节注意：从windows上写的文件copy到服务器时，文件要转格式再用，不然报错： dos2unix 文件名
+# 脚本写完运行前要给执行权限： chmod +x 脚本的名字
+# 程序提交到后台，top命令，free -h命令查看服务器资源，不要把服务器跑崩
+# nohup sh /alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file/1_RNAseq.sh > /alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file/RNAseq_runlog 2>&1 &
+# 记录id：402271
