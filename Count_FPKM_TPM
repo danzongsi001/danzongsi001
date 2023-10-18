@@ -1,0 +1,60 @@
+
+library(data.table)
+library(stringr)
+
+
+# 自己运行的时候这几个参数要改
+count_file <- "/alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file/Expr/featureCounts_merge.txt"
+prefix <- "/alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file/STAR/"
+sufix <- "_sortAligned.sortedByCoord.out.bam"
+out_path <- "/alldata/gsn/HeZuo/X101SC22074485-Z01-J009/GSN_file/Expr"
+
+
+
+####################
+# count
+count_data <- fread(count_file)
+# featureCounts算的基因非冗余外显子长度
+gene_lenth <- count_data[,c("Geneid","Length")]
+names(count_data)[7:ncol(count_data)] <- str_remove(str_remove(names(count_data)[7:ncol(count_data)],prefix),sufix)
+count_data <- as.matrix(count_data[,7:ncol(count_data)])
+rownames(count_data) <- gene_lenth$Geneid
+
+
+
+####################
+# FPKM
+# 标准化测序深度
+fpkm <- t(t(count_data)/colSums(count_data))*10^6   # 检查列和，都是100000 colSums(fpkm)
+# 标准化基因长度
+fpkm <- fpkm/gene_lenth$Length*10^3
+
+log_fpkm <- log2(fpkm+1)
+
+
+
+####################
+# TPM
+# 标准化基因长度
+tpm <- count_data/gene_lenth$Length*10^3
+# 标准化测序深度
+tpm <- t(t(tpm)/colSums(tpm))*10^6
+
+log_tpm <- log2(tpm+1)
+
+
+
+####################
+# 写出，自己用这种更方便，不涉及读写过程中细节参数设置，后续直接load就好
+# count数据后续用DESeq2做差异分析，log2(tpm+1)/log2(fpkm+1)选一个做其它的分析，如基因表达水平比较、相关性等分析
+expr=list(count=count_data,fpkm=fpkm,log_fpkm=log_fpkm,tpm=tpm,log_tpm=log_tpm)
+save(expr,file=file.path(out_path,"expr.rda"))
+# load(file.path(out_path,"expr.rda"))
+
+
+fwrite(data.table(count_data,keep.rownames=T),file.path(out_path,"Count.txt"),sep="\t")
+# 再次读取：count_data <- read.table(file.path(out_path,"Count.txt"),header=T)
+fwrite(data.table(fpkm,keep.rownames=T),file.path(out_path,"FPKM.txt"),sep="\t")
+fwrite(data.table(tpm,keep.rownames=T),file.path(out_path,"TPM.txt"),sep="\t")
+
+print("Finished!")
