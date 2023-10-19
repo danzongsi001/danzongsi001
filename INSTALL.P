@@ -1,0 +1,3 @@
+.libPaths() #查看R包安装路径
+file.edit('~/.Renviron') 
+R_LIBS_USER = "D:/R/R_LIBS"
